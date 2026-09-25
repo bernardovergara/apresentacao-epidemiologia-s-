@@ -1,0 +1,508 @@
+---
+title: "Notificacoes de suicidio e tentativas no SINAN"
+subtitle: "Analise dos registros de violencia autoprovocada no Brasil"
+date: "2026"
+format:
+  revealjs:
+    slide-number: true
+    chalkboard: true
+    css: apresentacao.css
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+pacotes <- c("dplyr", "ggplot2", "tidyr", "read.dbc", "scales", "plotly")
+for (pacote in pacotes) {
+	if (!requireNamespace(pacote, quietly = TRUE)) {
+		install.packages(pacote)
+	}
+}
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+interativo <- function(grafico) {
+	widget <- plotly::ggplotly(
+		grafico,
+		tooltip = c("x", "y", "colour", "fill"),
+		width = NULL,
+		height = NULL
+	)
+
+	widget %>%
+		plotly::layout(
+			xaxis = list(rangeslider = list(visible = FALSE)),
+			autosize = TRUE
+		) %>%
+		plotly::config(
+			displaylogo = FALSE,
+			responsive = TRUE,
+			scrollZoom = FALSE,
+			modeBarButtonsToRemove = c("lasso2d", "select2d")
+		)
+}
+
+formatar_numero <- scales::label_number(
+	big.mark = ".", decimal.mark = ",", accuracy = 1
+)
+
+pasta_dbc <- "../dados/brutos"
+cache_dir <- file.path("../dados", "cache_qmd")
+dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+
+arquivos_dbc <- list.files(
+	pasta_dbc, pattern = "\\.dbc$", full.names = TRUE, ignore.case = TRUE
+)
+
+ler_dbc_com_cache <- function(arquivo) {
+	cache <- file.path(cache_dir, paste0(basename(arquivo), ".rds"))
+	cache_valido <- file.exists(cache) &&
+		isTRUE(file.info(cache)$mtime >= file.info(arquivo)$mtime)
+
+	if (cache_valido) {
+		return(readRDS(cache))
+	}
+
+	dados_arquivo <- read.dbc::read.dbc(arquivo)
+	ano_arquivo <- as.integer(sub(
+		"^.*VIOLBR([0-9]{2})\\.dbc$", "\\1", basename(arquivo),
+		ignore.case = TRUE
+	))
+	dados_arquivo$ano_arquivo <- 2000 + ano_arquivo
+	saveRDS(dados_arquivo, cache)
+	dados_arquivo
+}
+
+cache_dados_violencia <- file.path(cache_dir, "dados_violencia.rds")
+cache_dados_valido <- file.exists(cache_dados_violencia) &&
+	length(arquivos_dbc) > 0 &&
+	all(file.info(arquivos_dbc)$mtime <= file.info(cache_dados_violencia)$mtime)
+
+if (cache_dados_valido) {
+	dados_violencia <- readRDS(cache_dados_violencia)
+} else {
+	dados <- bind_rows(lapply(arquivos_dbc, ler_dbc_com_cache))
+
+	dados_violencia <- dados %>%
+		mutate(
+			ano = ano_arquivo,
+			suicidio_ou_tentativa = toupper(trimws(as.character(LES_AUTOP))) %in%
+				c("1", "SIM", "S")
+		) %>%
+		filter(!is.na(ano), suicidio_ou_tentativa)
+
+	saveRDS(dados_violencia, cache_dados_violencia)
+}
+
+desfechos <- c(
+	"Tentativa com sucesso",
+	"Tentativa sem sucesso",
+	"Sem informacao"
+)
+
+classificar_evolucao <- function(x) {
+	codigo <- suppressWarnings(as.integer(sub(
+		"^\\s*([0-9]+).*", "\\1", as.character(x)
+	)))
+	factor(case_when(
+		codigo == 1 ~ "Tentativa sem sucesso",
+		codigo == 2 ~ "Tentativa com sucesso",
+		TRUE ~ "Sem informacao"
+	), levels = desfechos)
+}
+
+adicionar_idade <- function(tabela) {
+	tabela %>%
+		mutate(
+			idade_bruta = suppressWarnings(as.integer(as.character(NU_IDADE_N))),
+			idade_anos = case_when(
+				idade_bruta >= 4000 ~ idade_bruta %% 1000,
+				idade_bruta >= 0 & idade_bruta <= 120 ~ idade_bruta,
+				TRUE ~ NA_real_
+			),
+			faixa_idade = cut(
+				idade_anos,
+				breaks = c(-1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
+					55, 60, 65, 70, 75, 80, 85, Inf),
+				labels = c("0 a 5", "6 a 10", "11 a 15", "16 a 20", "21 a 25",
+					"26 a 30", "31 a 35", "36 a 40", "41 a 45", "46 a 50",
+					"51 a 55", "56 a 60", "61 a 65", "66 a 70", "71 a 75",
+					"76 a 80", "81 a 85", "86 ou mais")
+			)
+		)
+}
+
+normalizar_data <- function(x) {
+	if (inherits(x, "Date")) {
+		return(x)
+	}
+	valor <- as.character(x)
+	as.Date(ifelse(
+		grepl("^[0-9]{8}$", valor),
+		paste0(substr(valor, 1, 4), "-", substr(valor, 5, 6), "-", substr(valor, 7, 8)),
+		valor
+	), tryFormats = c("%Y-%m-%d", "%d/%m/%Y", "%Y%m%d"))
+}
+
+cache_dados_base <- file.path(cache_dir, "dados_base.rds")
+cache_base_valido <- file.exists(cache_dados_base) &&
+	isTRUE(file.info(cache_dados_base)$mtime >= file.info(cache_dados_violencia)$mtime)
+
+if (cache_base_valido) {
+	dados_base <- readRDS(cache_dados_base)
+} else {
+	dados_base <- dados_violencia %>%
+		mutate(
+			sexo = case_when(
+				CS_SEXO %in% c("M", "1") ~ "Masculino",
+				CS_SEXO %in% c("F", "2") ~ "Feminino",
+				TRUE ~ "Ignorado"
+			),
+			raca_cor = case_when(
+				as.character(CS_RACA) %in% c("1", "Branca") ~ "Branca",
+				as.character(CS_RACA) %in% c("2", "Preta") ~ "Preta",
+				as.character(CS_RACA) %in% c("3", "Amarela") ~ "Amarela",
+				as.character(CS_RACA) %in% c("4", "Parda") ~ "Parda",
+				as.character(CS_RACA) %in% c("5", "Indigena") ~ "Indigena",
+				TRUE ~ "Ignorado"
+			),
+			desfecho = classificar_evolucao(EVOLUCAO),
+			data_notificacao = normalizar_data(DT_NOTIFIC),
+			mes = as.integer(format(data_notificacao, "%m"))
+		)
+
+	saveRDS(dados_base, cache_dados_base)
+}
+
+cache_dados_base_idade <- file.path(cache_dir, "dados_base_idade.rds")
+cache_idade_valido <- file.exists(cache_dados_base_idade) &&
+	isTRUE(file.info(cache_dados_base_idade)$mtime >= file.info(cache_dados_base)$mtime)
+
+if (cache_idade_valido) {
+	dados_base_idade <- readRDS(cache_dados_base_idade)
+} else {
+	dados_base_idade <- adicionar_idade(dados_base)
+	saveRDS(dados_base_idade, cache_dados_base_idade)
+}
+
+criar_graficos_ano <- function(ano_filtro) {
+	dados_ano <- dados_base %>% filter(ano == ano_filtro)
+	dados_idade_ano <- dados_base_idade %>%
+		filter(ano == ano_filtro) %>%
+		filter(!is.na(faixa_idade))
+
+	idade_desfecho <- dados_idade_ano %>%
+		count(faixa_idade, desfecho, name = "casos")
+
+	mensal <- dados_ano %>%
+		filter(!is.na(mes)) %>%
+		count(mes, desfecho, name = "casos") %>%
+		complete(mes = 1:12, desfecho = desfechos, fill = list(casos = 0))
+
+	meses <- data.frame(
+		mes = 1:12,
+		nome_mes = factor(c(
+			"Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho",
+			"Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+		), levels = c(
+			"Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho",
+			"Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+		))
+	)
+
+	list(
+		sexo = ggplot(dados_ano %>% filter(sexo != "Ignorado") %>% count(sexo, name = "casos"),
+			aes(sexo, casos, fill = sexo)) +
+			geom_col(show.legend = FALSE) + scale_y_continuous(labels = formatar_numero) +
+			labs(title = paste("Notificacoes por sexo -", ano_filtro), x = "Sexo", y = "Casos") +
+			theme_minimal(base_size = 18),
+		raca = ggplot(dados_ano %>% filter(raca_cor != "Ignorado") %>% count(raca_cor, name = "casos"),
+			aes(raca_cor, casos, fill = raca_cor)) +
+			geom_col(show.legend = FALSE) + scale_y_continuous(labels = formatar_numero) +
+			labs(title = paste("Notificacoes por raca/cor -", ano_filtro), x = "Raca/cor", y = "Casos") +
+			theme_minimal(base_size = 18),
+		idade = ggplot(dados_idade_ano %>% count(faixa_idade, name = "casos"),
+			aes(faixa_idade, casos, group = 1)) +
+			geom_line(color = "#2166AC") + geom_point(color = "#2166AC") +
+			scale_y_continuous(labels = formatar_numero) +
+			labs(title = paste("Distribuicao por idade -", ano_filtro), x = "Faixa etaria", y = "Casos") +
+			theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+		escolaridade = ggplot(dados_ano %>%
+				mutate(escolaridade = recode(as.character(suppressWarnings(as.integer(as.character(CS_ESCOL_N)))),
+					`0` = "Analfabeto", `1` = "1a a 4a serie incompleta", `2` = "4a serie completa",
+					`3` = "5a a 8a serie incompleta", `4` = "Fundamental completo", `5` = "Medio incompleto",
+					`6` = "Medio completo", `7` = "Superior incompleto", `8` = "Superior completo",
+					`9` = "Ignorado", `10` = "Nao se aplica", .default = "Ignorado")) %>%
+				count(escolaridade, name = "casos") %>% arrange(desc(casos)),
+			aes(reorder(escolaridade, casos), casos)) +
+			geom_col(fill = "#4D9221") + coord_flip() +
+			scale_y_continuous(labels = formatar_numero) +
+			labs(title = paste("Distribuicao por escolaridade -", ano_filtro), x = "Escolaridade", y = "Casos") +
+			theme_minimal(base_size = 18),
+		idade_desfecho = ggplot(idade_desfecho, aes(faixa_idade, casos, fill = desfecho)) +
+			geom_col(position = "dodge") + scale_y_continuous(labels = formatar_numero) +
+			labs(title = paste("Idade por desfecho -", ano_filtro), x = "Faixa etaria", y = "Casos", fill = "Desfecho") +
+			theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+			idade_desfecho_informado = ggplot(
+				idade_desfecho %>% filter(desfecho != "Sem informacao"),
+				aes(faixa_idade, casos, fill = desfecho)
+			) +
+				geom_col(position = "dodge") + scale_y_continuous(labels = formatar_numero) +
+				labs(title = paste("Idade por desfecho informado -", ano_filtro), x = "Faixa etaria", y = "Casos", fill = "Desfecho") +
+				theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+		mensal = ggplot(mensal %>% left_join(meses, by = "mes"),
+			aes(nome_mes, casos, color = desfecho, group = desfecho)) +
+			geom_line() + geom_point() + scale_y_continuous(labels = formatar_numero) +
+			labs(title = paste("Quantidade mensal -", ano_filtro), x = "Mes", y = "Casos", color = "Desfecho") +
+				theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)),
+			mensal_informado = ggplot(
+				mensal %>% filter(desfecho != "Sem informacao") %>% left_join(meses, by = "mes"),
+				aes(nome_mes, casos, color = desfecho, group = desfecho)
+			) +
+				geom_line() + geom_point() + scale_y_continuous(labels = formatar_numero) +
+				labs(title = paste("Quantidade mensal: desfecho informado -", ano_filtro), x = "Mes", y = "Casos", color = "Desfecho") +
+				theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+	)
+}
+
+casos_por_ano <- dados_base %>% count(ano, name = "casos")
+evolucao_por_ano <- dados_base %>% count(ano, desfecho, name = "casos") %>%
+	complete(ano = sort(unique(dados_base$ano)), desfecho = desfechos, fill = list(casos = 0))
+mensal_geral <- dados_base %>% filter(!is.na(mes)) %>% count(mes, desfecho, name = "casos") %>%
+	complete(mes = 1:12, desfecho = desfechos, fill = list(casos = 0))
+```
+
+# Visao geral
+
+```{r}
+interativo(ggplot(casos_por_ano, aes(ano, casos)) +
+	geom_line(color = "#B2182B") + geom_point(color = "#B2182B", size = 2) +
+	scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Total de notificacoes por ano", x = "Ano", y = "Casos") + theme_minimal(base_size = 18))
+```
+
+# Evolucao por desfecho
+
+```{r}
+interativo(ggplot(evolucao_por_ano, aes(ano, casos, color = desfecho, group = desfecho)) +
+	geom_line() + geom_point() + scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Total de notificacoes por ano e evolucao", x = "Ano", y = "Casos", color = "Evolucao") +
+	theme_minimal(base_size = 18))
+```
+
+# Evolucao com desfecho informado
+
+```{r}
+interativo(evolucao_por_ano %>% filter(desfecho != "Sem informacao") %>%
+	ggplot(aes(ano, casos, color = desfecho, group = desfecho)) +
+	geom_line() + geom_point() + scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Evolucao por ano: desfecho informado", x = "Ano", y = "Casos", color = "Evolucao") +
+	theme_minimal(base_size = 18))
+```
+
+# Perfil por sexo e raca/cor
+
+```{r}
+sexo_raca <- dados_base %>% filter(sexo != "Ignorado", raca_cor != "Ignorado") %>% count(ano, sexo, raca_cor, name = "casos")
+interativo(ggplot(sexo_raca, aes(ano, casos, color = raca_cor, group = raca_cor)) +
+	geom_line() + geom_point() + facet_wrap(~sexo) +
+	scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Notificacoes por sexo e raca/cor", x = "Ano", y = "Casos", color = "Raca/cor") +
+	theme_minimal(base_size = 18))
+```
+
+# Homens por raca/cor ao longo dos anos
+
+```{r}
+interativo(ggplot(sexo_raca %>% filter(sexo == "Masculino"),
+	 aes(ano, casos, color = raca_cor, group = raca_cor)) +
+	geom_line() + geom_point() +
+	scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Homens por raca/cor ao longo dos anos", x = "Ano", y = "Casos", color = "Raca/cor") +
+	theme_minimal(base_size = 18))
+```
+
+# Mulheres por raca/cor ao longo dos anos
+
+```{r}
+interativo(ggplot(sexo_raca %>% filter(sexo == "Feminino"),
+	 aes(ano, casos, color = raca_cor, group = raca_cor)) +
+	geom_line() + geom_point() +
+	scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Mulheres por raca/cor ao longo dos anos", x = "Ano", y = "Casos", color = "Raca/cor") +
+	theme_minimal(base_size = 18))
+```
+
+# Distribuicao por idade e escolaridade
+
+```{r}
+dados_idade <- dados_base_idade %>% filter(!is.na(faixa_idade)) %>% count(faixa_idade, name = "casos")
+interativo(ggplot(dados_idade, aes(faixa_idade, casos, group = 1)) +
+	geom_line(color = "#2166AC") + geom_point(color = "#2166AC") +
+	scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Distribuicao por faixa etaria", x = "Faixa etaria", y = "Casos") +
+	theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)))
+```
+
+# Idade por desfecho
+
+```{r}
+idade_desfecho <- dados_base_idade %>% filter(!is.na(faixa_idade)) %>% count(faixa_idade, desfecho, name = "casos")
+interativo(ggplot(idade_desfecho, aes(faixa_idade, casos, fill = desfecho)) +
+	geom_col(position = "dodge") + scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Quantidade por faixa etaria e desfecho", x = "Faixa etaria", y = "Casos", fill = "Desfecho") +
+	theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)))
+```
+
+# Idade por desfecho informado
+
+```{r}
+interativo(idade_desfecho %>% filter(desfecho != "Sem informacao") %>%
+	ggplot(aes(faixa_idade, casos, fill = desfecho)) +
+	geom_col(position = "dodge") + scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Quantidade por faixa etaria e desfecho informado", x = "Faixa etaria", y = "Casos", fill = "Desfecho") +
+	theme_minimal(base_size = 18) + theme(axis.text.x = element_text(angle = 45, hjust = 1)))
+```
+
+# Quantidade mensal
+
+```{r}
+meses_apresentacao <- data.frame(mes = 1:12, nome_mes = factor(c(
+	"Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho", "Julho", "Agosto",
+	"Setembro", "Outubro", "Novembro", "Dezembro"
+), levels = c(
+	"Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho", "Julho", "Agosto",
+	"Setembro", "Outubro", "Novembro", "Dezembro"
+)))
+interativo(mensal_geral %>% left_join(meses_apresentacao, by = "mes") %>%
+	ggplot(aes(nome_mes, casos, color = desfecho, group = desfecho)) +
+	geom_line() + geom_point() + scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Quantidade mensal por desfecho", x = "Mes", y = "Casos", color = "Desfecho") +
+	theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)))
+```
+
+# Quantidade mensal: desfecho informado
+
+```{r}
+interativo(mensal_geral %>% filter(desfecho != "Sem informacao") %>%
+	left_join(meses_apresentacao, by = "mes") %>%
+	ggplot(aes(nome_mes, casos, color = desfecho, group = desfecho)) +
+	geom_line() + geom_point() + scale_y_continuous(labels = formatar_numero) +
+	labs(title = "Quantidade mensal: desfecho informado", x = "Mes", y = "Casos", color = "Desfecho") +
+	theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)))
+```
+
+# 2024: perfil das notificacoes
+
+```{r}
+g2024 <- criar_graficos_ano(2024)
+interativo(g2024$sexo)
+```
+
+## 2024: raca/cor
+
+```{r}
+interativo(g2024$raca)
+```
+
+## 2024: faixa etaria
+
+```{r}
+interativo(g2024$idade)
+```
+
+## 2024: escolaridade
+
+```{r}
+interativo(g2024$escolaridade)
+```
+
+# 2024: desfecho e sazonalidade
+
+```{r}
+interativo(g2024$idade_desfecho)
+```
+
+## 2024: idade por desfecho informado
+
+```{r}
+interativo(g2024$idade_desfecho_informado)
+```
+
+## 2024: quantidade mensal
+
+```{r}
+interativo(g2024$mensal)
+```
+
+## 2024: quantidade mensal com desfecho informado
+
+```{r}
+interativo(g2024$mensal_informado)
+```
+
+# 2025: perfil das notificacoes
+
+```{r}
+g2025 <- criar_graficos_ano(2025)
+interativo(g2025$sexo)
+```
+
+## 2025: raca/cor
+
+```{r}
+interativo(g2025$raca)
+```
+
+## 2025: faixa etaria
+
+```{r}
+interativo(g2025$idade)
+```
+
+## 2025: escolaridade
+
+```{r}
+interativo(g2025$escolaridade)
+```
+
+# 2025: desfecho e sazonalidade
+
+```{r}
+interativo(g2025$idade_desfecho)
+```
+
+## 2025: idade por desfecho informado
+
+```{r}
+interativo(g2025$idade_desfecho_informado)
+```
+
+## 2025: quantidade mensal
+
+```{r}
+interativo(g2025$mensal)
+```
+
+## 2025: quantidade mensal com desfecho informado
+
+```{r}
+interativo(g2025$mensal_informado)
+```
+
+# Consideracoes finais
+
+- Registros sem informacao de evolucao sao apresentados separadamente.
+- Comparacoes por desfecho informado nao representam necessariamente o total de notificacoes.
+- Os resultados dependem da qualidade e completude dos campos preenchidos no SINAN.
+
+# Encerramento
+
+Fonte dos dados: SINAN / DATASUS.
+
+Processamento realizado diretamente neste arquivo `.qmd`, com cache local dos DBCs.

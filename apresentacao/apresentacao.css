@@ -1,0 +1,150 @@
+/* Visual system for the interactive Reveal.js presentation. */
+:root {
+  --ink: #20252b;
+  --muted: #65717c;
+  --accent: #b2182b;
+  --accent-dark: #7f1020;
+  --paper: #f5f7f8;
+  --panel: #ffffff;
+  --line: #dce2e7;
+}
+
+body {
+  background: var(--paper);
+}
+
+.reveal {
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(178, 24, 43, 0.06), transparent 34%),
+    var(--paper);
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  font-size: 30px;
+}
+
+.reveal .slides {
+  text-align: left;
+}
+
+.reveal .slides section {
+  padding: 0.35em 0.8em;
+}
+
+.reveal .slides section:not(.title-slide)::before {
+  content: "SINAN / DATASUS";
+  display: block;
+  color: var(--muted);
+  font-size: 0.38em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin-bottom: 0.9em;
+}
+
+.reveal .title-slide {
+  background: linear-gradient(120deg, #ffffff 0%, #f5f7f8 58%, #f2dfe2 100%);
+  border-left: 0.35em solid var(--accent);
+  padding: 1.3em 1.5em;
+}
+
+.reveal .title-slide h1,
+.reveal .title-slide h2 {
+  border: 0;
+  padding-left: 0;
+}
+
+.reveal h1,
+.reveal h2,
+.reveal h3 {
+  color: var(--ink);
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.reveal h1 {
+  font-size: 1.3em;
+  line-height: 1.05;
+  border-left: 0.1em solid var(--accent);
+  padding-left: 0.3em;
+}
+
+.reveal .title-slide h1 {
+  font-size: 2.15em;
+}
+
+.reveal h2 {
+  font-size: 1.12em;
+  border-bottom: 3px solid var(--accent);
+  padding-bottom: 0.16em;
+  margin-bottom: 0.35em;
+}
+
+.reveal h3 {
+  font-size: 1.08em;
+}
+
+.reveal p,
+.reveal li {
+  color: var(--ink);
+  line-height: 1.28;
+}
+
+.reveal ul {
+  margin-top: 0.45em;
+}
+
+.reveal li::marker {
+  color: var(--accent);
+}
+
+.reveal .subtitle,
+.reveal .quarto-title-author,
+.reveal .date {
+  color: var(--muted);
+}
+
+.reveal .subtitle {
+  font-size: 0.8em;
+  line-height: 1.25;
+}
+
+.reveal .slide-number {
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.42em;
+}
+
+.reveal .footer {
+  color: var(--muted);
+  font-size: 0.48em;
+}
+
+.reveal .html-widget,
+.reveal .plotly,
+.reveal .plotly-graph-div {
+  width: 100% !important;
+  max-width: 100%;
+  height: 62vh !important;
+  min-height: 0;
+  overflow: hidden;
+  margin: 0 auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(32, 37, 43, 0.08);
+}
+
+.reveal .plotly .main-svg {
+  border-radius: 10px;
+}
+
+.reveal .plotly .legend text,
+.reveal .plotly .gtitle,
+.reveal .plotly .xtick text,
+.reveal .plotly .ytick text {
+  font-family: "Aptos", "Segoe UI", sans-serif !important;
+}
+
+.reveal .progress {
+  color: var(--accent);
+}
